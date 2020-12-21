@@ -1,0 +1,214 @@
+---
+title: "CFA project"
+author: "Kevin Greenberg"
+date: "12/14/2020"
+output:
+  html_document:
+    df_print: paged
+Data name: FBPS-ValidationData
+Data source: https://openpsychometrics.org/_rawdata/
+---
+
+# Purpose
+The goal of the Confirmatory factor analysis (CFA) project is to determine the accuracy and reliability of a survey that was developed to differentiate between people who were the first born child and not the first born child. The survey came from a scale (First Born Personality scale, (FBPS Scale v1.0)) created by a group wanting to look at the differences in responses on the first born survey in relation to personality surveys in the FBPS scale v1.0. This CFA project only focuses on the First born survey. For the development of this survey, the survey makers began with 375 items and narrowed the scale down to 26 questions as these 26 questions had the largest correlations to confirm the difference between first born and non-first born individuals. From a psychometric viewpoint this is an inadequate method to analyze the accuracy and reliability of a survey. As such, this project will examine the data from First born survey to determine if the survey can reliably and accurately differentiate between first born respondents and non-first born respondents. To do so, CFA analyses and Cronbach's alphas are run.
+
+## Data information
+The data was collected on the internet between April 2019 and June 2019 and at the end of the survey, all survey takers were asked if they would like their answers to be used in research. This dataset only includes those who agreed (*N* = 41,841). No details are given on the demographics of the survey takers. Lastly, the survey had 26 Likert rated items presented on one page (1=Disagree, 3=Neutral, 5=Agree).
+
+# Overview of data
+```{r setup, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, comment = "", tidy = TRUE)
+
+#Load package for data cleaning and plots
+library(tidyverse)
+#load packages for CFA and Cronbach's alpha
+library(lavaan)
+library(psych)
+library(knitr)
+library(semPlot)
+
+
+#Load data
+fb <- read.delim("C:/Users/kevin/Desktop/Portfolio/CFA/docs/FBPS-ValidationData.csv")
+```
+
+In the below table we see that 20,571 of the respondents were the first born child. The range in birth position is from 0th to 11th born. However, the survey was designed for determining birth position in families with 1 to 4 children. That being we must reduce the data set to only include families with 1 to 4 children. Lastly, all respondents who reported being the 0th born are also removed from the data set.
+```{r count}
+knitr:: kable(table(fb$birthpos), booktabs = TRUE, format = "markdown") 
+```
+*Note*: Var1 = Birth position; Freq = How many respondents reported the respective birth position.
+```{r cleaning, include=FALSE}
+#Data cleaning####
+#Delete responses of birth order 0, the codebook does not explain this. In addition, the survey was designed for families with 1 to 4 children. So for CFA purposes we will follow these parameters. 
+fb <- fb[fb$birthpos != 0, ]
+fb <- fb[!fb$birthpos >= 5, ]
+
+#Recategorize first born from non-first born
+fb$birthpos <- ifelse(fb$birthpos ==1, 1, 0)
+q <- table(fb$birthpos) #Still have 20,571 first born and 19,307 non-first born. So an even split in the data.
+summary(fb)#No missing data
+```
+With the data set cleaned there are still `r q[2]` first born respondents and now `r q[1]` non-first born respondents (people born as the 2nd through 4th child). This reduces the data set to `r q[1] + q[2]` and there is an approximately even number of respondents by birth position, based on a binary scale (0 = non-first born; 1 = first born). There are also no missing data in the data set (a rarity in typical data but this data has already been cleaned prior to being made available online).
+
+## Plot
+Next we will plot the difference in responses between first born and non-first born respondents. Based on the small magnitude of difference in overall responses to First born survey, it gives an indication that using a survey to parse first born and non-first born respondents is a very difficult task.
+```{r plot setup, include = FALSE}
+cols = c(1:26)
+df1  = transform(fb, Qmean=rowMeans(fb[cols]), Qsd=apply(fb[cols],1, sd))
+
+
+df1 <- df1[,c(30,90)]
+
+df1 <- df1%>%
+  group_by(birthpos) %>%
+  summarise_all(funs(mean, sd))
+
+df1 <- round(df1, 3)
+df1$birthpos <- as.factor(df1$birthpos)
+levels(df1$birthpos)<-c("Non-first born","First Born")
+```
+
+```{r plots, fig.height= 3, fig.width=5, fig.align='center'}
+ggplot(df1, aes(x=as.factor(birthpos), y=mean, fill=as.factor(birthpos))) +
+  geom_bar(position=position_dodge(), stat="identity", colour='black') +
+  geom_errorbar(aes(ymin=mean, ymax=mean+sd), width=.2)  +
+  geom_text(aes(label = mean), size = 5, vjust = 1.5) +
+  xlab("") + ylab("Mean score for First born questions") + 
+  ggtitle("Mean score for First born survey by birth position on FBPS scale") + 
+  theme(legend.position = "none") + 
+  theme(plot.title = element_text (size=10, hjust = 0.5))+
+  theme(axis.text=element_text(size=8),
+        axis.title=element_text(size=8))+
+  scale_fill_brewer(palette="Set3")
+```
+*Note*: Colors are chosen as red-green color blind friendly
+
+# Data analysis
+## CFA for the First Born questions
+
+```{r CFA1}
+fb1 <- fb[,c(1:26, 30)]
+RNGversion("4.0.3"); set.seed(123)
+rand_sample <- sample(39878, 200)
+##get the initial training df
+fb1 <- fb1[rand_sample, ]
+```
+The cleaned data set has an *N* = 39,878, which is a huge sample for a CFA mainly because it will inflate the estimates. Therefore, the data set is reduced to 200 random respondents. There are `r sum(fb1$birthpos)` first born respondents, indicating a roughly even random split of respondents. 
+
+Additionally, it is important to standardized the questions in the survey because this creates more accurate estimates of the data. There are two ways of standardizing. The first is scaling via the Latent variable. However, if there is variance between the questions (a lack homogeneity of variance), then it is more common and accurate to standardize through a marker variable. Therefore, to take the more cautious approach, we will use the marker variable model. To indicate what question will be the best marker variable we will use an indicator model that scales based on the latent variables. The marker variable is the questions that has the estimate closest to 1.0. 
+
+## Indicating the marker variable to standardize the CFA model
+For the first born factor, Q3 is the best marker variable as it has an estimate of .965. While Q21 has an estimate of .845 indicating it as the best marker variable for the non-first born factor. "FB" is the latent variable for first born questions and "NFB" is the latent variable for non-first born questions.
+```{r indicator model}
+fbQ.model1 <- "FB =~  Q1+ Q2 + Q3 + Q4 + Q6 + Q7 + Q8 + Q9 + Q10 + Q11 +
+Q12 + Q13 + Q14 + Q15 + Q16 + Q17 + Q19 + Q20 + Q23 + Q24 + Q26
+
+NFB =~ Q5 + Q18 + Q21 + Q22 + Q25
+
+FB ~~ 1*FB
+NFB ~~ 1*NFB
+"
+
+fitQ1 <- lavaan::cfa(fbQ.model1, data=fb1,std.lv=TRUE)
+summary(fitQ1, fit.measures=T,standardized=T)
+
+```
+
+## Full CFA model
+The output for the full CFA model with marker variable shows an SRMR around .08 is adequate fit, but .05 is good fit. So we see and SRMR = .080, indicating below adequate fit. Also, RMSEA at or below .05 is a good fit, while below .08 is an adequate fit, and above .10 is a bad fit (Brown & Cudeck, 1993). Here our model has an RMSEA = .074, indicating an adequate fit. CFI and TLI are also good indicators of fit with better fit being close to 1, and our model has a CFI = .705 and TLI = .681, both indicating a poor fit. A significant chi-square indicates a poor fit, but chi-squared is not the most useful fit indices because with skewed data we see increased chi-squared. AIC/BIC is only useful for comparing models with lower AIC indicating better fit.
+
+Looking at the estimates in the Marker variable model we have a few items where the loading is below .4, which is considered poor (Tabachnick & Fidell, 2011). In this case we can remove the items and conduct a reduced CFA model (From First born questions, removed Q2, Q13, Q15, & Q17, Q19 - Q26 (From Non-first born questions removed Q18, Q22, Q25)
+```{r marker variable model}
+
+fbQ.model2 <- "FB =~  Q1+ Q2 + 1*Q3 + Q4 + Q6 + Q7 + Q8 + Q9 + Q10 + Q11 +
+Q12 + Q13 + Q14 + Q15 + Q16 + Q17 + Q19 + Q20 + Q23 + Q24 + Q26
+
+NFB =~ Q5 + Q18 + 1*Q21 + Q22 + Q25"
+
+#1*Q3 Makes Q7 the marker variable for FB
+#1*Q21 Makes Q21 the marker variable NFB
+#FB and NFB are by default already correlated
+
+
+fitQ2 <- lavaan::cfa(fbQ.model2, data=fb1,std.lv=TRUE)
+summary(fitQ2, fit.measures=T,standardized=T)
+```
+
+## Reduced CFA model
+Below are the results for the reduced CFA model. In the reduced model our SRMR decreased to SRMR = 0.067, indicating a better fit. However, the RMSEA = .085, increased but still suggests an adequate fit. The CFI = .862 and TLI = .839, both suggesting a more adequate model. It appears that the reduced model is a better fit based on the CFA results. RMSEA did increase in the reduced model, most likely due to removing many parameters from the model(i.e. questions from the survey). RMSEA is sensitive to the number of parameters. Yet, based on the SRMR, CFI and TLI, which are recommended fit indices for CFA (Hu & Bentler, 1998), the reduced model is a better fit.
+```{r reduced marker variable model}
+
+#Reduced Marker variable model
+fbQ.model3 <- "FB =~  Q1 + 1*Q3 + Q4 + Q6 + Q7 + Q8 + Q9 + Q10 + Q11 +
+Q12 + Q14 + Q16
+
+NFB =~ Q5 + 1*Q21"
+
+fitQ3 <- lavaan::cfa(fbQ.model3, data=fb1,std.lv=TRUE)
+summary(fitQ3, fit.measures=T,standardized=T)
+```
+
+## CFA plots
+The plots show that the full model has poor estimates of the 2 factors, as indicated by the negative loadings. While the plot for the reduced CFA model shows a more accurate fit of the data. 
+
+### Full CFA Model
+
+```{r CFA plots1, fig.align = "center", fig.height= 16, fig.width= 16}
+
+semPaths(fitQ2, "par", posCol=c("skyblue4", "red"), 
+         edge.label.cex = .75, fade = F, node.width = .75, 
+         asize = 2, layout = "circle")
+
+```
+
+
+### Reduced CFA Model
+
+```{r CFA plots2,  fig.align = "center", fig.height= 16, fig.width= 16}
+
+semPaths(fitQ3, "par", posCol=c("skyblue4", "red"), 
+         edge.label.cex = .75, fade = F, node.width = .75, 
+         asize = 2, layout = "circle")
+
+```
+Also to note, it does not make sense to compare the above two models(via anova function) because although both models use the same data set,  models have a different number of items/variable reduced they are working with different sets of observed variables.
+
+## Cronbach's alpha
+
+### Full model Cronbach's alpha
+When all 26 questions are included, the results indicate a Cronbach's alpha of .79 which is acceptable. The survey developers did not conduct a reliability check, rather picked the questions with the highest correlation. However, if they did run this reliability check, they may interpret the results as having created a reliable measure. When looking at the results the reliability check appears accurate as the 5 items that are supposed to be reversed scored (load onto the non-first born factor; Q5, Q18, Q21, Q22, & Q25) are indicated in the output. However, Q13 is also reversed scored, but it should not be scored in such manner. This is a case where the Cronbach's alphas all indicate a reliable model, while the CFA model indicates a poor fit(Shelby, 2011). Therefore, based on the reduced CFA model we will remove a few questions and re-analyze the Cronbach's alpha.
+
+```{r, cronbachs1}
+fbQ1ca <- select(fb1, Q1,Q2 ,Q3 ,Q4 ,Q5 ,Q6 ,Q7 ,Q8 ,Q9 ,Q10 ,Q11 ,Q12 ,Q13
+                 ,Q14 ,Q15 ,Q16 ,Q17 ,Q18 ,Q19 ,Q20 ,Q21 ,Q22 ,Q23 ,Q24 ,Q25 ,Q26)
+
+alpha(fbQ1ca, check.keys = TRUE)
+
+```
+
+### Reduced model Cronbach's alpha
+With the reduced number of questions, the Cronbach's alpha is .84, which is good reliability and higher than the previous analysis. The more important aspect is looking at the questions that are reversed scored, in this case all the questions that are reversed scored are supposed to be based on the reduced CFA model and the intentions of the survey developers.
+```{r cronbachs2}
+fbQ2ca <-  select(fb1, Q1, Q3, Q4, Q5, Q6, Q7, Q8, Q9, Q10, Q11, Q12, Q14, Q16, Q21)
+alpha(fbQ2ca, check.keys = TRUE) 
+
+```
+
+# Conclusion
+## Summary for the First born survey
+Based on the CFA's and Cronbach's alphas it appears there are 2 factors in the First born questionnaire, questions that map onto first born respondents and questions that map onto non-first born respondents. However, there are differences in the what questions should be in each factor based on what the survey developers intended, the CFA results, and the Cronbach's alphas. The survey creators intended a majority of the questions to favor first born respondents, while questions, 5, 18, 21, 22, & 25 were designed for non-first born respondents. The full CFA model indicated a poor fit when including all the questions in the 2 factor model. As such, questions that had poor estimates (< .400)(Tabachnick & Fidell, 2011), where removed and a reduced FA model was conducted, resulting in a more accurate fit of the data. The reliability estimates also confirm the reduced 2 factor model of the survey to be more reliable. 
+
+## Suggestions for the First born survey
+Based on the reduced CFA model and the Cronbach's alpha for this model, the First born survey in the FPBS Scale v1.0 should be reduced. The questions (Q1, Q3, Q4, Q6, Q7, Q8, Q9, Q10, Q11, Q12, Q14 & Q16) should be scored normally and Q5 and Q21 should be reversed scored as to give the best estimate of if a respondent is the first born child or not. The shorter survey will reduce the amount of time to complete the survey, the demand on the survey takers, along with increasing the accuracy and the reliability to determine respondents who are first-born in their families.
+
+### References
+
+Brown, M., & Cudeck, R. (1993). Alternative ways to assess model fit. Testing Structural Equation Models.
+
+Hu, L. T., & Bentler, P. M. (1998). Fit indices in covariance structure modeling: Sensitivity to underparameterized model misspecification. Psychological methods, 3(4), 424.
+
+Shelby, L. B. (2011) Beyond Cronbach's Alpha: Considering Confirmatory
+Factor Analysis and Segmentation, Human Dimensions of Wildlife, 16:2, 142-148, DOI:
+10.1080/10871209.2011.537302
+
+Tabachnick, B. G., & Fidell, L. S. (2011). Multivariate Analysis of Variance (MANOVA). International encyclopedia of statistical science, 13, 902-904.
